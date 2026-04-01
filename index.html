@@ -256,47 +256,51 @@
             setTt(mkTable(n, w));
           };
 
-          const onExportSVG = () => {
+          const onCopyImage = async () => {
             if (!svgRef.current) return;
             try {
               const svg = svgRef.current.cloneNode(true);
               const rect = svgRef.current.getBoundingClientRect();
+              
+              // Remove background for transparency
+              const grid = svg.querySelector('rect[fill="url(#grid)"]');
+              if (grid) grid.remove();
+              
               svg.setAttribute("width", rect.width);
               svg.setAttribute("height", rect.height);
               svg.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
               svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-              
-              const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
-              style.textContent = `
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-                text { font-family: 'Inter', system-ui, sans-serif; }
-              `;
-              svg.prepend(style);
 
               const serializer = new XMLSerializer();
-              let source = serializer.serializeToString(svg);
-              if(!source.startsWith('<?xml')) {
-                source = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\r\n' + source;
-              }
+              const source = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\r\n' + serializer.serializeToString(svg);
 
-              // Use application/octet-stream to force download and avoid browser interpretation issues
-              const blob = new Blob([source], { type: "application/octet-stream" });
+              const img = new Image();
+              const blob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
               const url = URL.createObjectURL(blob);
-              
-              const link = document.createElement("a");
-              link.href = url;
-              link.download = `logic_circuit_${new Date().getTime()}.svg`;
-              document.body.appendChild(link);
-              link.click();
-              
-              // We do not revoke the URL immediately to ensure the download completes.
-              // Clean up the DOM element after a delay.
-              setTimeout(() => {
-                document.body.removeChild(link);
-              }, 1000);
+
+              img.onload = () => {
+                const canvas = document.createElement("canvas");
+                canvas.width = rect.width;
+                canvas.height = rect.height;
+                const ctx = canvas.getContext("2d");
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0);
+                
+                canvas.toBlob(async (pngBlob) => {
+                  try {
+                    const item = new ClipboardItem({ 'image/png': pngBlob });
+                    await navigator.clipboard.write([item]);
+                    alert("Image copied to clipboard (Transparent background)!");
+                  } catch (err) {
+                    console.error("Clipboard copy failed:", err);
+                    alert("Copy failed. Try a different browser or check permissions.");
+                  }
+                  URL.revokeObjectURL(url);
+                }, 'image/png');
+              };
+              img.src = url;
             } catch (e) {
-              console.error("Export failed:", e);
-              alert("Export failed: " + e.message);
+              console.error("Copying logic failed:", e);
             }
           };
 
@@ -321,7 +325,7 @@
                 />
                 <button onClick={onGenerate} style={{ background: "#3b82f6", color: "white", border: "none", padding: "8px 20px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Generate</button>
                 <button onClick={() => { setTt(mkTable(nodes, wires)); setShowTT(true); }} style={{ background: "#8b5cf6", color: "white", border: "none", padding: "8px 20px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Truth Table</button>
-                <button onClick={onExportSVG} style={{ background: "#10b981", color: "white", border: "none", padding: "8px 20px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Export SVG</button>
+                <button onClick={onCopyImage} style={{ background: "#f43f5e", color: "white", border: "none", padding: "8px 20px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Copy Image</button>
               </div>
 
               {/* Canvas */}
@@ -339,8 +343,8 @@
                   if (!fn || !tn) return null;
                   const a = oPos(fn), b = iPos(tn, w.toPort);
                   const on = vals[w.from] === 1;
-                  const dx = Math.max(30, Math.abs(b.x - a.x)/2);
-                  const path = `M ${a.x} ${a.y} C ${a.x+dx} ${a.y} ${b.x-dx} ${b.y} ${b.x} ${b.y}`;
+                  const midX = (a.x + b.x) / 2;
+                  const path = `M ${a.x} ${a.y} L ${midX} ${a.y} L ${midX} ${b.y} L ${b.x} ${b.y}`;
                   return <path key={w.id} d={path} fill="none" stroke={on ? "#10b981" : "#334155"} strokeWidth={on ? 3 : 2} style={{ transition: "stroke 0.2s" }} />;
                 })}
 
