@@ -279,15 +279,21 @@
                 source = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\r\n' + source;
               }
 
-              const base64data = btoa(unescape(encodeURIComponent(source)));
-              const dataUri = 'data:image/svg+xml;base64,' + base64data;
+              // Use application/octet-stream to force download and avoid browser interpretation issues
+              const blob = new Blob([source], { type: "application/octet-stream" });
+              const url = URL.createObjectURL(blob);
               
               const link = document.createElement("a");
-              link.href = dataUri;
-              link.download = `logic_circuit_${Date.now()}.svg`;
+              link.href = url;
+              link.download = `logic_circuit_${new Date().getTime()}.svg`;
               document.body.appendChild(link);
               link.click();
-              document.body.removeChild(link);
+              
+              // We do not revoke the URL immediately to ensure the download completes.
+              // Clean up the DOM element after a delay.
+              setTimeout(() => {
+                document.body.removeChild(link);
+              }, 1000);
             } catch (e) {
               console.error("Export failed:", e);
               alert("Export failed: " + e.message);
