@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANSI Logic Circuit Designer</title>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <!-- Babel standalone -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; height: 100vh; overflow: hidden; background: #0b0f19; color: #e2e8f0; }
+        #root { height: 100%; width: 100%; }
+        input::placeholder { color: #64748b; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useRef, useMemo, useEffect } = React;
+
+        // ─── 상수 ─────────────────────────────────────────────
+        const GW = 64, GH = 48, PR = 6;
+
+        // ANSI SVG Paths (Centered in 64x48 box)
+        const PATHS = {
+          AND:  "M 0,0 L 32,0 A 24,24 0 0,1 32,48 L 0,48 Z",
+          OR:   "M 0,0 C 12,0 24,6 56,24 C 24,42 12,48 0,48 C 12,24 12,24 0,0 Z",
+          NOT:  "M 0,0 L 48,24 L 0,48 Z",
+          XOR:  "M 6,0 C 18,0 30,6 62,24 C 30,42 18,48 6,48 C 18,24 18,24 6,0 Z M 0,0 C 12,24 12,24 0,48 C 12,24 12,24 0,0 Z",
+          INPUT: "M 0,24 A 24,24 0 1,1 48,24 A 24,24 0 1,1 0,24 Z",
+          OUTPUT: "M 0,24 A 24,24 0 1,1 48,24 A 24,24 0 1,1 0,24 Z",
+        };
+
+        const DEFS = {
+          INPUT:  { n: 0, label: "IN",   col: "#10b981", shape: "INPUT" },
+          OUTPUT: { n: 1, label: "OUT",  col: "#6366f1", shape: "OUTPUT" },
+          AND:    { n: 2, label: "AND",  col: "#3b82f6", shape: "AND" },
+          OR:     { n: 2, label: "OR",   col: "#8b5cf6", shape: "OR" },
+          NOT:    { n: 1, label: "NOT",  col: "#f59e0b", shape: "NOT", bubble: true },
+          NAND:   { n: 2, label: "NAND", col: "#ef4444", shape: "AND", bubble: true },
+          NOR:    { n: 2, label: "NOR",  col: "#ec4899", shape: "OR",  bubble: true },
+          XOR:    { n: 2, label: "XOR",  col: "#06b6d4", shape: "XOR" },
+          XNOR:   { n: 2, label: "XNOR", col: "#f97316", shape: "XOR", bubble: true },
+        };
+
+        // ─── 포트 위치 계산 ────────────────────────────────────
+        function iPos(node, i) {
+          const n = DEFS[node.type].n;
+          const ox = (node.type === 'OR' || node.type === 'NOR' || node.type === 'XOR' || node.type === 'XNOR') ? 8 : 0;
+          return { x: node.x + ox, y: node.y + (n === 1 ? GH / 2 : (i + 1) * GH / (n + 1)) };
+        }
+        function oPos(node) {
+          let ox = GW;
+          if (node.type === 'NOT') ox = 56;
+          if (node.type === 'NAND' || node.type === 'NOR' || node.type === 'XNOR') ox = GW + 6;
+          if (node.type === 'AND') ox = 56;
+          if (node.type === 'OR' || node.type === 'XOR') ox = 56;
+          if (node.type === 'INPUT' || node.type === 'OUTPUT') ox = 48;
+          return { x: node.x + ox, y: node.y + GH / 2 };
+        }
+
+        // ─── 게이트 논리 평가 ──────────────────────────────────
+        function evalGate(type, ins) {
+          const v = ins.map(x => x ?? 0);
+          switch (type) {
+            case "AND":  return v.every(Boolean) ? 1 : 0;
+            case "OR":   return v.some(Boolean)  ? 1 : 0;
+            case "NOT":  return v[0] ? 0 : 1;
+            case "NAND": return v.every(Boolean) ? 0 : 1;
+            case "NOR":  return v.some(Boolean)  ? 0 : 1;
+            case "XOR":  return v.reduce((a, b) => a ^ b, 0);
+            case "XNOR": return v.reduce((a, b) => a ^ b, 0) ? 0 : 1;
+            default:     return 0;
+          }
+        }
+
+        function simulate(nodes, wires, overrides) {
+          const vals = {};
+          for (const n of nodes) {
+            if (n.type === "INPUT") vals[n.id] = overrides ? (overrides[n.id] ?? 0) : (n.val ?? 0);
+          }
+          const conn = {};
+          for (const w of wires) (conn[w.to] ||= {})[w.toPort] = w.from;
+
+          for (let pass = 0; pass < nodes.length + 5; pass++) {
+            let changed = false;
+            for (const node of nodes) {
+              if (node.type === "INPUT") continue;
+              const srcs = conn[node.id] || {};
+              const ins = Array.from({ length: DEFS[node.type].n }, (_, i) => vals[srcs[i]]);
+              const nv = node.type === "OUTPUT" ? (ins[0] ?? 0) : evalGate(node.type, ins);
+              if (vals[node.id] !== nv) { vals[node.id] = nv; changed = true; }
+            }
+            if (!changed) break;
+          }
+          return vals;
+        }
+
+        function mkTable(nodes, wires) {
+          const ins  = nodes.filter(n => n.type === "INPUT");
+          const outs = nodes.filter(n => n.type === "OUTPUT");
+          if (!ins.length || !outs.length || ins.length > 6) return null;
+          return {
+            inLabels:  ins.map(i => i.lbl),
+            outLabels: outs.map(o => o.lbl),
+            rows: Array.from({ length: 1 << ins.length }, (_, i) => {
+              const ov = Object.fromEntries(ins.map((inp, j) => [inp.id, (i >> (ins.length - 1 - j)) & 1]));
+              const v = simulate(nodes, wires, ov);
+              return { ins: ins.map(inp => ov[inp.id]), outs: outs.map(o => v[o.id] ?? 0) };
+            }),
+          };
+        }
+
+        let _seq = Date.now();
+        const uid = () => `n${_seq++}`;
+
+        // ─── 고급 논리 수식 파서 (F = xz' + y'z) ──────────────────
+        const parseAdvancedExpr = (expr) => {
+          // Normalization
+          let s = expr.replace(/\s+/g, '').replace(/=/g, ' = ');
+          let outputName = "Y";
+          if (s.includes('=')) {
+            const parts = s.split('=');
+            outputName = parts[0].trim();
+            s = parts[1];
+          }
+
+          // Tokenizer
+          const tokens = [];
+          for (let i = 0; i < s.length; i++) {
+            const c = s[i];
+            if (/[A-Z]/i.test(c)) tokens.push({ type: 'VAR', val: c });
+            else if (c === '+') tokens.push({ type: 'OR' });
+            else if (c === "'") tokens.push({ type: 'NOT_SUFFIX' });
+            else if (c === '(') tokens.push({ type: 'LPAREN' });
+            else if (c === ')') tokens.push({ type: 'RPAREN' });
+          }
+
+          let pos = 0;
+          const peek = () => tokens[pos];
+          const consume = () => tokens[pos++];
+
+          // Recursive Descent with Precedence
+          const parsePrimary = () => {
+            let node;
+            const t = consume();
+            if (t.type === 'LPAREN') {
+              node = parseExpr();
+              consume(); // RPAREN
+            } else if (t.type === 'VAR') {
+              node = { type: 'var', name: t.val };
+            }
+            
+            // Check for suffix NOT (')
+            while (peek() && peek().type === 'NOT_SUFFIX') {
+              consume();
+              node = { type: 'op', op: 'NOT', children: [node] };
+            }
+            return node;
+          };
+
+          const parseAnd = () => {
+            let left = parsePrimary();
+            // Implicit AND (juxtaposition) or explicit (if we added it)
+            while (peek() && (peek().type === 'VAR' || peek().type === 'LPAREN')) {
+              const right = parsePrimary();
+              left = { type: 'op', op: 'AND', children: [left, right] };
+            }
+            return left;
+          };
+
+          const parseExpr = () => {
+            let left = parseAnd();
+            while (peek() && peek().type === 'OR') {
+              consume();
+              const right = parseAnd();
+              left = { type: 'op', op: 'OR', children: [left, right] };
+            }
+            return left;
+          };
+
+          try {
+            return { ast: parseExpr(), outputName };
+          } catch(e) {
+            return null;
+          }
+        };
+
+        const buildCircuit = (ast, outLabel) => {
+          const nodes = [], wires = [];
+          const vars = {};
+          const layers = [];
+
+          const getVarNode = (name) => {
+            if (vars[name]) return vars[name];
+            const id = uid();
+            const node = { id, type: 'INPUT', lbl: name, val: 0, layer: 0 };
+            nodes.push(node);
+            vars[name] = id;
+            if (!layers[0]) layers[0] = [];
+            layers[0].push(node);
+            return id;
+          };
+
+          const traverse = (node) => {
+            if (node.type === 'var') return { id: getVarNode(node.name), layer: 0 };
+            const childResults = node.children.map(c => traverse(c));
+            const currentLayer = Math.max(...childResults.map(r => r.layer)) + 1;
+            const id = uid();
+            nodes.push({ id, type: node.op, lbl: node.op, layer: currentLayer });
+            if (!layers[currentLayer]) layers[currentLayer] = [];
+            layers[currentLayer].push(nodes[nodes.length-1]);
+            childResults.forEach((c, i) => wires.push({ id: uid(), from: c.id, to: id, toPort: i }));
+            return { id, layer: currentLayer };
+          };
+
+          const root = traverse(ast);
+          const finalId = uid();
+          const finalLayer = root.layer + 1;
+          nodes.push({ id: finalId, type: 'OUTPUT', lbl: outLabel, layer: finalLayer });
+          if (!layers[finalLayer]) layers[finalLayer] = [];
+          layers[finalLayer].push(nodes[nodes.length-1]);
+          wires.push({ id: uid(), from: root.id, to: finalId, toPort: 0 });
+
+          // Coordinates
+          layers.forEach((nodes, l) => {
+            nodes.forEach((n, i) => {
+              n.x = 60 + l * 160;
+              n.y = 120 + i * 100 - (nodes.length-1)*50 + 200;
+            });
+          });
+          return { nodes, wires };
+        };
+
+        // ─── 메인 컴포넌트 ─────────────────────────────────────
+        function MainApp() {
+          const [nodes, setNodes] = useState([]);
+          const [wires, setWires] = useState([]);
+          const [expr, setExpr] = useState("F = xz' + y'z");
+          const [tt, setTt] = useState(null);
+          const [showTT, setShowTT] = useState(false);
+          const [drag, setDrag] = useState(null);
+          const svgRef = useRef(null);
+
+          const vals = useMemo(() => simulate(nodes, wires, null), [nodes, wires]);
+
+          const onGenerate = () => {
+            const res = parseAdvancedExpr(expr);
+            if (!res) { alert("Invalid syntax"); return; }
+            const { nodes: n, wires: w } = buildCircuit(res.ast, res.outputName);
+            setNodes(n);
+            setWires(w);
+            setTt(mkTable(n, w));
+          };
+
+          const onMove = e => {
+            if (!drag) return;
+            const r = svgRef.current.getBoundingClientRect();
+            const x = e.clientX - r.left, y = e.clientY - r.top;
+            setNodes(ns => ns.map(n => n.id === drag.id ? { ...n, x: x - drag.ox, y: y - drag.oy } : n));
+          };
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+              {/* Header */}
+              <div className="glass" style={{ padding: "12px 20px", display: "flex", alignItems: "center", gap: 15, borderBottom: "1px solid #1e293b" }}>
+                <div style={{ fontSize: 20, fontWeight: 900, letterSpacing: -1 }}>LOGIGRAM</div>
+                <input 
+                  value={expr} 
+                  onChange={e => setExpr(e.target.value)}
+                  placeholder="e.g. F = xz' + y'z"
+                  style={{ flex: 1, background: "#0f172a", border: "1px solid #334155", borderRadius: 8, padding: "8px 16px", color: "white", outline: "none", fontFamily: "monospace" }}
+                  onKeyDown={e => e.key==='Enter' && onGenerate()}
+                />
+                <button onClick={onGenerate} style={{ background: "#3b82f6", color: "white", border: "none", padding: "8px 20px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Generate</button>
+                <button onClick={() => { setTt(mkTable(nodes, wires)); setShowTT(true); }} style={{ background: "#8b5cf6", color: "white", border: "none", padding: "8px 20px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>Truth Table</button>
+              </div>
+
+              {/* Canvas */}
+              <svg ref={svgRef} style={{ flex: 1, background: "#0b0f19" }} onMouseMove={onMove} onMouseUp={() => setDrag(null)}>
+                <defs>
+                   <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                     <circle cx="1" cy="1" r="1" fill="#1e293b" />
+                   </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)" />
+                
+                {/* Wires */}
+                {wires.map(w => {
+                  const fn = nodes.find(n => n.id === w.from), tn = nodes.find(n => n.id === w.to);
+                  if (!fn || !tn) return null;
+                  const a = oPos(fn), b = iPos(tn, w.toPort);
+                  const on = vals[w.from] === 1;
+                  const dx = Math.max(30, Math.abs(b.x - a.x)/2);
+                  const path = `M ${a.x} ${a.y} C ${a.x+dx} ${a.y} ${b.x-dx} ${b.y} ${b.x} ${b.y}`;
+                  return <path key={w.id} d={path} fill="none" stroke={on ? "#10b981" : "#334155"} strokeWidth={on ? 3 : 2} style={{ transition: "stroke 0.2s" }} />;
+                })}
+
+                {/* Nodes */}
+                {nodes.map(n => {
+                  const def = DEFS[n.type];
+                  const v = vals[n.id] ?? 0;
+                  const on = v === 1;
+                  return (
+                    <g key={n.id} transform={`translate(${n.x},${n.y})`} onMouseDown={e => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      setDrag({ id: n.id, ox: e.clientX - r.left, oy: e.clientY - r.top });
+                    }} style={{ cursor: "move" }}>
+                       <path d={PATHS[def.shape]} fill="#0f172a" stroke={on ? def.col : "#334155"} strokeWidth={2} />
+                       {def.bubble && <circle cx={def.shape === 'NOT' ? 52 : 60} cy="24" r="4" fill="#0f172a" stroke={on ? def.col : "#334155"} strokeWidth={2} />}
+                       <text x={def.shape === 'NOT' ? 15 : 18} y="28" fill="white" fontWeight="900" fontSize="12" pointerEvents="none" opacity="0.6">{n.lbl}</text>
+                       
+                       {/* Ports */}
+                       {Array.from({ length: def.n }, (_, i) => {
+                         const p = iPos({ x: 0, y: 0, type: n.type }, i);
+                         return <circle key={i} cx={p.x} cy={p.y} r="3" fill="#334155" />;
+                       })}
+                       <circle cx={oPos({ x: 0, y: 0, type: n.type }).x} cy="24" r="3" fill={on ? "#10b981" : "#334155"} />
+                       
+                       {/* Input Toggle */}
+                       {n.type === 'INPUT' && (
+                         <g onClick={() => setNodes(ns => ns.map(x => x.id === n.id ? { ...x, val: x.val ? 0 : 1 } : x))} style={{ cursor: "pointer" }}>
+                            <rect x="0" y="0" width="48" height="48" fill="transparent" />
+                            <text x="24" y="44" textAnchor="middle" fill={on ? "#10b981" : "#ef4444"} fontSize="12" fontWeight="900">{v}</text>
+                         </g>
+                       )}
+                       {n.type === 'OUTPUT' && <text x="24" y="44" textAnchor="middle" fill={on ? "#6366f1" : "#ef4444"} fontSize="12" fontWeight="900">{v}</text>}
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {/* Modal Truth Table */}
+              {showTT && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }} onClick={() => setShowTT(false)}>
+                  <div className="glass" style={{ padding: 30, borderRadius: 16, border: "1px solid #334155", maxWidth: "80%", maxHeight: "80%", overflow: "auto" }} onClick={e=>e.stopPropagation()}>
+                    <h2 style={{ marginTop: 0 }}>Truth Table</h2>
+                    {tt ? (
+                      <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            {tt.inLabels.map(l => <th key={l} style={{ padding: 12, border: "1px solid #334155", background: "#3b82f6" }}>{l}</th>)}
+                            {tt.outLabels.map(l => <th key={l} style={{ padding: 12, border: "1px solid #334155", background: "#8b5cf6" }}>{l}</th>)}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tt.rows.map((r, i) => (
+                            <tr key={i}>
+                              {r.ins.map((v, j) => <td key={j} style={{ padding: 10, border: "1px solid #334155", textAlign: "center", color: v? "#10b981":"#ef4444" }}>{v}</td>)}
+                              {r.outs.map((v, j) => <td key={j} style={{ padding: 10, border: "1px solid #334155", textAlign: "center", fontWeight: 700, color: v? "#8b5cf6":"#ef4444" }}>{v}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : <p>Need inputs/outputs</p>}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<MainApp />);
+    </script>
+</body>
+</html>
